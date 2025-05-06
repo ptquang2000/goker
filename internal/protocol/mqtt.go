@@ -129,222 +129,205 @@ func (f ConnectFlag) valid() error {
 type MqttProperty byte
 
 const (
-	SessionExpInt MqttProperty = 0x11
-	ReceiveMax                 = 0x21
-	MaxPacketSize              = 0x27
-	TopicAliasMax              = 0x22
-	ReqRespInfo                = 0x19
-	ReqProbInfo                = 0x17
-	UserProp                   = 0x26
-	AuthMethod                 = 0x15
-	AuthData                   = 0x16
-	WillDelayInt               = 0x18
-	PlFormatInd                = 0x01
-	MsgExpInt                  = 0x02
-	ContentType                = 0x03
-	RespTopic                  = 0x08
-	CorrData                   = 0x09
+	SessionExpiryInterval      MqttProperty = 0x11
+	ReceiveMaximum                          = 0x21
+	MaximumPacketSize                       = 0x27
+	TopicAliasMaximum                       = 0x22
+	RequestResponseInformation              = 0x19
+	RequestProblemInformation               = 0x17
+	UserProperty                            = 0x26
+	AuthenticationMethod                    = 0x15
+	AuthenticationData                      = 0x16
+	WillDelayInterval                       = 0x18
+	PayloadFormatIndicator                  = 0x01
+	MessageExpiryInterval                   = 0x02
+	ContentType                             = 0x03
+	ResponseTopic                           = 0x08
+	CorrelationData                         = 0x09
 )
 
 type ConnectProperties struct {
-	sessionExpInt time.Duration
-	receiveMax    uint16
-	maxPacketSize uint32
-	topicAliasMax uint16
-	reqRespInfo   bool
-	reqProbInfo   bool
-	userProp      UTF8StringPair
-	authMethod    UTF8String
-	authData      BinaryData
+	sessionExpiryInterval time.Duration
+	receiveMaximum        TwoByteInteger
+	maximumPacketSize     FourByteInteger
+	topicAliasMaximum     TwoByteInteger
+	requestResponseInfo   ByteInteger
+	requestProblemInfo    ByteInteger
+	userProperty          UTF8StringPair
+	authenticationMethod  UTF8String
+	authenticationData    BinaryData
 }
 
 func (p *ConnectProperties) decode(b []byte) (int, error) {
-	p.sessionExpInt = 0
-	p.receiveMax = math.MaxUint16
-	p.maxPacketSize = math.MaxUint32
-	p.topicAliasMax = 0
-	p.reqRespInfo = false
-	p.reqProbInfo = true
+	p.sessionExpiryInterval = 0
+	p.receiveMaximum = math.MaxUint16
+	p.maximumPacketSize = math.MaxUint32
+	p.topicAliasMaximum = 0
+	p.requestResponseInfo = false
+	p.requestProblemInfo = true
 
 	var propLen VarByteInt
 	rBytes, err := propLen.decode(b)
 	if err != nil {
 		return 0, err
+	} else if len(b) < rBytes+int(propLen) {
+		return rBytes, errors.New("Invalid Conenct Property Length.")
 	} else if propLen == 0 {
 		return rBytes, nil
 	}
 
 	b = b[rBytes : rBytes+int(propLen)]
+	var n int
 	for len(b) > 0 {
-		switch MqttProperty(b[0]) {
-		case SessionExpInt:
-			if len(b[1:]) < 4 {
-				return 0, errors.New("Invalid Session Expiration Interval")
+		mProp := MqttProperty(b[0])
+		b = b[1:]
+		switch mProp {
+		case SessionExpiryInterval:
+			var d FourByteInteger
+			if n, err = d.decode(b); err != nil {
+				return 0, errors.New("Invalid Session Expiry Interval, err:" + err.Error())
 			}
-			p.sessionExpInt = time.Duration(binary.BigEndian.Uint32(b[1:5]))
-			p.sessionExpInt *= time.Second
-			b = b[5:]
-		case ReceiveMax:
-			if len(b[1:]) < 2 {
-				return 0, errors.New("Invalid Receive Maximum")
+			p.sessionExpiryInterval = time.Duration(d) * time.Second
+		case ReceiveMaximum:
+			if n, err = p.receiveMaximum.decode(b); err != nil {
+				return 0, errors.New("Invalid Receive Maximum, err:" + err.Error())
 			}
-			p.receiveMax = binary.BigEndian.Uint16(b[1:3])
-			b = b[3:]
-		case MaxPacketSize:
-			if len(b[1:]) < 4 {
-				return 0, errors.New("Invalid Maximum Packet Size")
+		case MaximumPacketSize:
+			if n, err = p.maximumPacketSize.decode(b); err != nil {
+				return 0, errors.New("Invalid Maximum Packet Size, err:" + err.Error())
 			}
-			p.maxPacketSize = binary.BigEndian.Uint32(b[1:5])
-			b = b[5:]
-		case TopicAliasMax:
-			if len(b[1:]) < 2 {
+		case TopicAliasMaximum:
+			if n, err = p.topicAliasMaximum.decode(b); err != nil {
 				return 0, errors.New("Invalid Topic Alias Maximum")
 			}
-			p.topicAliasMax = binary.BigEndian.Uint16(b[1:3])
-			b = b[3:]
-		case ReqRespInfo:
-			if b[1] > 1 {
-				return 0, errors.New("Invalid Request Response Info")
+		case RequestResponseInformation:
+			if n, err = p.requestProblemInfo.decode(b); err != nil {
+				return 0, errors.New("Invalid Request Response Information, err:" + err.Error())
 			}
-			p.reqRespInfo = b[1] == 1
-			b = b[2:]
-		case ReqProbInfo:
-			if b[1] > 1 {
-				return 0, errors.New("Invalid Request Problem Info")
+		case RequestProblemInformation:
+			if n, err = p.requestProblemInfo.decode(b); err != nil {
+				return 0, errors.New("Invalid Request Problem Information, err:" + err.Error())
 			}
-			p.reqProbInfo = b[1] == 1
-			b = b[2:]
-		case UserProp:
-			n, err := p.userProp.decode(b)
-			if err != nil {
-				return 0, errors.New("Invalid User Property")
+		case UserProperty:
+			if n, err = p.userProperty.decode(b); err != nil {
+				return 0, errors.New("Invalid User Property, err:" + err.Error())
 			}
-			b = b[1+n:]
-			break
-		case AuthMethod:
-			n, err := p.authMethod.decode(b)
-			if err != nil {
-				return 0, errors.New("Invalid Authentication Method")
+		case AuthenticationMethod:
+			if n, err = p.authenticationMethod.decode(b); err != nil {
+				return 0, errors.New("Invalid Authentication Method" + err.Error())
 			}
-			b = b[1+n:]
-		case AuthData:
-			n, err := p.authData.decode(b)
-			if err != nil {
-				return 0, errors.New("Invalid Authentication Data")
+		case AuthenticationData:
+			if n, err = p.authenticationData.decode(b); err != nil {
+				return 0, errors.New("Invalid Authentication Data" + err.Error())
 			}
-			b = b[1+n:]
 		default:
 			return 0, errors.New("Unknown connect packet property")
 		}
+		b = b[n:]
+		rBytes += 1 + n
 	}
-	return rBytes + int(propLen), nil
+	return rBytes, nil
 }
 
 type WillProperties struct {
-	delayInt    time.Duration
-	fmtInd      byte
-	msgExpInt   time.Duration
-	contentType UTF8String
-	respTopic   UTF8String
-	corrData    byte
-	userProp    UTF8StringPair
+	delayInterval          time.Duration
+	payloadFormatIndicator ByteInteger
+	messageExpiryInterval  time.Duration
+	contentType            UTF8String
+	responseTopic          UTF8String
+	correlationData        BinaryData
+	userProperty           UTF8StringPair
 }
 
 func (p *WillProperties) decode(b []byte) (int, error) {
-	p.delayInt = 0
-	p.fmtInd = 0
-	p.corrData = 0
+	p.delayInterval = 0
+	p.payloadFormatIndicator = false
 
 	var pLen VarByteInt
 	rBytes, err := pLen.decode(b)
 	if err != nil {
 		return 0, errors.New("Unable to decode will property length.")
+	} else if len(b) < rBytes+int(pLen) {
+		return rBytes, errors.New("Invalid Conenct Property Length.")
 	} else if pLen == 0 {
 		return rBytes, nil
 	}
 	b = b[rBytes : rBytes+int(pLen)]
 
+	var n int
 	for len(b) > 0 {
-		switch MqttProperty(b[0]) {
-		case WillDelayInt:
-			if len(b[1:]) < 4 {
-				return 0, errors.New("Invalid Will Delay Interval.")
+		mProp := MqttProperty(b[0])
+		b = b[1:]
+		switch mProp {
+		case WillDelayInterval:
+			var d FourByteInteger
+			if n, err = d.decode(b); err != nil {
+				return 0, errors.New("Invalid Will Delay Interval, err:" + err.Error())
 			}
-			p.delayInt = time.Duration(binary.BigEndian.Uint32(b[1:5]))
-			p.delayInt *= time.Second
-			b = b[5:]
-		case PlFormatInd:
-			if len(b[:1]) < 1 {
-				return 0, errors.New("Invalid Payload Format Indicator.")
+			p.delayInterval = time.Duration(d) * time.Second
+		case PayloadFormatIndicator:
+			if n, err = p.payloadFormatIndicator.decode(b); err != nil {
+				return 0, errors.New("Invalid Payload Format Indicator, err:" + err.Error())
 			}
-			p.fmtInd = b[1]
-			b = b[2:]
-		case MsgExpInt:
-			if len(b[1:]) < 4 {
-				return 0, errors.New("Invalid Will Message Expiration Interval.")
+		case MessageExpiryInterval:
+			var d FourByteInteger
+			if n, err = d.decode(b); err != nil {
+				return 0, errors.New("Invalid Will Message Expiration Interval, err:" + err.Error())
 			}
-			p.msgExpInt = time.Duration(binary.BigEndian.Uint32(b[1:5]))
-			p.msgExpInt *= time.Second
-			b = b[5:]
+			p.messageExpiryInterval = time.Duration(d) * time.Second
 		case ContentType:
-			n, err := p.contentType.decode(b[1:])
-			if err != nil {
-				return 0, errors.New("Invalid Will Content Type.")
+			if n, err = p.contentType.decode(b); err != nil {
+				return 0, errors.New("Invalid Will Content Type, err:" + err.Error())
 			}
-			b = b[1+n:]
-		case RespTopic:
-			n, err := p.respTopic.decode(b[1:])
-			if err != nil {
-				return 0, errors.New("Invalid Response Topic.")
+		case ResponseTopic:
+			if n, err = p.responseTopic.decode(b); err != nil {
+				return 0, errors.New("Invalid Response Topic, err:" + err.Error())
 			}
-			b = b[1+n:]
-		case CorrData:
-			if len(b[:1]) < 1 {
-				return 0, errors.New("Invalid Correlation Data.")
+		case CorrelationData:
+			if n, err = p.correlationData.decode(b); err != nil {
+				return 0, errors.New("Invalid Correlation Data, err:" + err.Error())
 			}
-			p.corrData = b[1]
-			b = b[2:]
-		case UserProp:
-			n, err := p.userProp.decode(b)
-			if err != nil {
-				return 0, errors.New("Invalid User Property")
+		case UserProperty:
+			if n, err = p.userProperty.decode(b); err != nil {
+				return 0, errors.New("Invalid User Property, err:" + err.Error())
 			}
-			b = b[1+n:]
+		default:
+			return 0, errors.New("Unknown connect will property")
 		}
+		b = b[n:]
+		rBytes += 1 + n
 	}
-
-	return rBytes + int(pLen), nil
+	return rBytes, nil
 }
 
 type ConnectPayload struct {
-	clientId UTF8String
-	wProp    WillProperties
-	wTopic   UTF8String
-	wPayload BinaryData
-	username UTF8String
-	password BinaryData
+	clientIdentifier UTF8String
+	willProperties   WillProperties
+	willTopic        UTF8String
+	willPayload      BinaryData
+	username         UTF8String
+	password         BinaryData
 }
 
 func (pl *ConnectPayload) decode(f *ConnectFlag, b []byte) error {
-	n, err := pl.clientId.decode(b)
+	n, err := pl.clientIdentifier.decode(b)
 	if err != nil {
 		return err
 	}
 	b = b[n:]
 
 	if f.will() {
-		n, err = pl.wProp.decode(b)
-		if err != nil {
+		if n, err = pl.willProperties.decode(b); err != nil {
 			return err
 		}
 		b = b[n:]
 
-		if n, err = pl.wTopic.decode(b); err != nil {
+		if n, err = pl.willTopic.decode(b); err != nil {
 			return err
 		}
 		b = b[n:]
 
-		if n, err = pl.wPayload.decode(b); err != nil {
+		if n, err = pl.willPayload.decode(b); err != nil {
 			return err
 		}
 		b = b[n:]
@@ -403,8 +386,7 @@ func ParseConnect(p *MqttHeader, b []byte) (Request, error) {
 	b = b[n:]
 
 	var pl ConnectPayload
-	err = pl.decode(&flag, b)
-	if err != nil {
+	if err = pl.decode(&flag, b); err != nil {
 		return nil, err
 	}
 
@@ -418,29 +400,35 @@ func (r *ConnectRequest) WriteTo(w io.Writer) (int64, error) {
 type ReasonCode byte
 
 const (
-	Success      ReasonCode = 0
-	Unspecified             = 0x80
-	Malformed               = 0x81
-	ProtocolErr             = 0x82
-	ImplSpecific            = 0x83
-	Unsupported             = 0x84
-	InvClientId             = 0x85
-	BadUsrPass              = 0x86
-	NotAuth                 = 0x87
-	Unavailable             = 0x88
-	Busy                    = 0x89
-	Banned                  = 0x8A
-	BadAuth                 = 0x8C
-	InvalidTopic            = 0x90
-	LargePacket             = 0x95
-	ExceedQuota             = 0x97
-	InvPlFormat             = 0x99
-	NoSupRetain             = 0x9A
-	NoSpQoS                 = 0x9B
-	UseAnother              = 0x9C
-	ServerMoved             = 0x9D
-	ExceedRate              = 0x9F
+	Success                    ReasonCode = 0
+	Unspecified                           = 0x80
+	MalformedPacket                       = 0x81
+	ProtocolError                         = 0x82
+	ImplementationSpecific                = 0x83
+	UnsupportedProtocolVersion            = 0x84
+	InvalidClientIdentifier               = 0x85
+	BadUsernamePassword                   = 0x86
+	NotAuthorized                         = 0x87
+	ServerUnavailable                     = 0x88
+	ServerBusy                            = 0x89
+	Banned                                = 0x8A
+	BadAuthenticationMethod               = 0x8C
+	InvalidTopicName                      = 0x90
+	PacketTooLarge                        = 0x95
+	ExceedQuota                           = 0x97
+	InvalidPayloadFormat                  = 0x99
+	RetainNotSupported                    = 0x9A
+	QoSNotSupported                       = 0x9B
+	UseAnotherServer                      = 0x9C
+	ServerMoved                           = 0x9D
+	ExceededConnectionRate                = 0x9F
 )
+
+type ConnackProperties struct {
+	sessionExpiryInterval time.Duration
+	receiveMaximum        uint16
+	retainAvailable       bool
+}
 
 func (r *ConnectRequest) Response() ([]byte, error) {
 	// ackFlag := byte(0)

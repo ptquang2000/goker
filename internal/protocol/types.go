@@ -9,12 +9,12 @@ import (
 
 type VarByteInt uint32
 
-func (v VarByteInt) encode(x uint) []byte {
+func (v VarByteInt) encode() []byte {
 	encodedByte := uint32(0)
 	for {
-		encodedByte = uint32(x % 128)
-		x /= 128
-		if x > 0 {
+		encodedByte = uint32(v % 128)
+		v /= 128
+		if v > 0 {
 			encodedByte |= 128
 		} else {
 			break
@@ -32,7 +32,7 @@ func (v *VarByteInt) decode(b []byte) (int, error) {
 	var encodedByte uint32
 	for {
 		if multiplier > 128*128*128 || n >= len(b) {
-			return 0, errors.New("Invalid Variable Byte Integer")
+			return 0, errors.New("Unable to decode Variable Byte Integer")
 		}
 		encodedByte = uint32(b[n])
 		x += (encodedByte & 127) * multiplier
@@ -49,10 +49,10 @@ func (v *VarByteInt) decode(b []byte) (int, error) {
 
 type UTF8String string
 
-func (s *UTF8String) decode(b []byte) (int, error) {
-	*s = ""
+func (v *UTF8String) decode(b []byte) (int, error) {
+	*v = ""
 	if len(b) < 2 {
-		return 0, errors.New("Invalid UTF-8 string.")
+		return 0, errors.New("Unable to decode UTF-8 string.")
 	}
 
 	slen := binary.BigEndian.Uint16(b[:2])
@@ -62,12 +62,12 @@ func (s *UTF8String) decode(b []byte) (int, error) {
 	b = b[2:]
 
 	if len(b) < int(slen) {
-		return 0, errors.New("Invalid UTF-8 string.")
+		return 0, errors.New("Unable to decode UTF-8 string.")
 	}
 	b = b[:slen]
 
 	if !utf8.Valid(b) {
-		return 0, errors.New("Invalid UTF-8 string.")
+		return 0, errors.New("Unable to decode UTF-8 string.")
 	}
 
 	n := 0
@@ -76,7 +76,7 @@ func (s *UTF8String) decode(b []byte) (int, error) {
 		if r == utf8.RuneError {
 			continue
 		}
-		*s += UTF8String(r)
+		*v += UTF8String(r)
 		n += size
 	}
 	return 2 + n, nil
@@ -84,37 +84,73 @@ func (s *UTF8String) decode(b []byte) (int, error) {
 
 type UTF8StringPair []string
 
-func (sp *UTF8StringPair) decode(b []byte) (int, error) {
-	*sp = []string{}
+func (v *UTF8StringPair) decode(b []byte) (int, error) {
+	*v = []string{}
 	if len(b) < 4 {
-		return 0, errors.New("Invalid UTF-8 string pair.")
+		return 0, errors.New("Unable to decode UTF-8 string pair.")
 	}
 
 	rBytes := 0
-	for len(*sp) <= 2 && len(b[rBytes:]) >= 2 {
+	for len(*v) <= 2 && len(b[rBytes:]) >= 2 {
 		var s UTF8String
 		n, err := s.decode(b)
 		if err != nil {
 			return 0, err
 		}
 
-		*sp = append(*sp, string(s))
+		*v = append(*v, string(s))
 		rBytes += n
 	}
 
-	if len(*sp) != 2 {
-		return 0, errors.New("Invalid UTF-8 string pair.")
+	if len(*v) != 2 {
+		return 0, errors.New("Unable to decode UTF-8 string pair.")
 	}
 	return rBytes, nil
 }
 
 type BinaryData []byte
 
-func (bd *BinaryData) decode(b []byte) (int, error) {
+func (v *BinaryData) decode(b []byte) (int, error) {
 	if len(b) < 2 {
-		return 0, errors.New("Invalid BinaryData.")
+		return 0, errors.New("Unable to decode BinaryData.")
 	}
-	bdLen := binary.BigEndian.Uint16(b[:2])
-	*bd = bytes.Clone(b[2 : 2+bdLen])
-	return int(bdLen) + 2, nil
+	vLen := binary.BigEndian.Uint16(b[:2])
+	*v = bytes.Clone(b[2 : 2+vLen])
+	return int(vLen) + 2, nil
+}
+
+type ByteInteger bool
+
+func (v *ByteInteger) decode(b []byte) (int, error) {
+	if len(b) < 1 {
+		return 0, errors.New("Unable to decode Byte Integer.")
+	}
+	b = b[:1]
+	if b[0] > 1 {
+		return 0, errors.New("Invalid Byte Integer value.")
+	}
+	*v = ByteInteger(b[0] == 1)
+	return len(b), nil
+}
+
+type TwoByteInteger uint16
+
+func (v *TwoByteInteger) decode(b []byte) (int, error) {
+	if len(b) < 2 {
+		return 0, errors.New("Unable to decode Two Byte Integer.")
+	}
+	b = b[:2]
+	*v = TwoByteInteger(binary.BigEndian.Uint16(b))
+	return len(b), nil
+}
+
+type FourByteInteger uint32
+
+func (v *FourByteInteger) decode(b []byte) (int, error) {
+	if len(b) < 4 {
+		return 0, errors.New("Unable to decode Two Byte Integer.")
+	}
+	b = b[:4]
+	*v = FourByteInteger(binary.BigEndian.Uint32(b))
+	return len(b), nil
 }
