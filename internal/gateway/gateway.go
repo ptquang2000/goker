@@ -43,10 +43,12 @@ func clientHandle(c net.Conn) {
 			return
 		}
 
-		req, err = p.Parse(b)
+		req, err := p.Parse(b)
 		if err != nil {
-			utils.LogError("Failed to parse body, err:", err)
+			utils.LogError("Close connection with reason, err:", err)
 			return
 		}
+
+		req.WriteTo(c)
 	}
 }

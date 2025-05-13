@@ -9,6 +9,10 @@ import (
 
 type VarByteInt uint32
 
+func (v *VarByteInt) Add(n int) {
+	*v += VarByteInt(n)
+}
+
 func (v VarByteInt) encode() []byte {
 	encodedByte := uint32(0)
 	for {
@@ -22,7 +26,7 @@ func (v VarByteInt) encode() []byte {
 	}
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint32(b, encodedByte)
-	return bytes.TrimRight(b, "\x00")
+	return bytes.Trim(b, "\x00")
 }
 
 func (v *VarByteInt) decode(b []byte) (int, error) {
@@ -120,6 +124,16 @@ func (v *BinaryData) decode(b []byte) (int, error) {
 }
 
 type ByteInteger bool
+
+func (v ByteInteger) encode() []byte {
+	b := make([]byte, 1)
+	if v {
+		b[0] = 0b1
+	} else {
+		b[0] = 0b0
+	}
+	return b
+}
 
 func (v *ByteInteger) decode(b []byte) (int, error) {
 	if len(b) < 1 {

@@ -35,37 +35,84 @@ const (
 	COUNT
 )
 
+func (t CType) encode() []byte {
+	b := make([]byte, 1)
+	b[0] = byte(t << 4)
+	return b
+}
+
+func (t *CType) decode(b []byte) (int, error) {
+	if len(b) < 1 {
+		return 0, errors.New("Missing packet type in header.")
+	}
+	*t = CType(b[0]>>4) & 0b0001111
+	if *t <= RESERVED || *t >= COUNT {
+		return 0, errors.New("Unknowned MQTT Control Packet type!")
+	}
+	return 1, nil
+}
+
 type Flag struct {
 	dup    bool
 	qos    bool
 	retain bool
 }
+
+func (f Flag) encode() []byte {
+	b := make([]byte, 1)
+	b[0] = 0
+	if f.dup {
+		b[0] |= 0b0100
+	}
+	if f.qos {
+		b[0] |= 0b0010
+	}
+	if f.dup {
+		b[0] |= 0b0001
+	}
+	return b
+}
+
+func (f *Flag) decode(b []byte) (int, error) {
+	if len(b) < 1 {
+		return 0, errors.New("Missing flag in header.")
+	}
+	*f = Flag{dup: bool(b[0]&0b0100 != 0), qos: bool(b[0]&0b0010 != 0), retain: bool(b[0]&0b0001 != 0)}
+	return 1, nil
+}
+
 type MqttHeader struct {
 	ctl  CType
 	flag Flag
 	len  VarByteInt
 }
 
+func (h MqttHeader) encode() []byte {
+	b := make([]byte, 2)
+	b[0] = h.ctl.encode()[0] | h.flag.encode()[0]
+	b[1] = h.len.encode()[0]
+	return b
+}
+
 func ParseHeader(b []byte) (RequestHeader, error) {
-	if len(b) < FixedHeaderLen {
-		return nil, errors.New("Invalid header size!")
+	h := &MqttHeader{}
+
+	n, err := h.ctl.decode(b)
+	if err != nil {
+		return nil, err
 	}
-	h := b[:FixedHeaderLen]
-
-	t := CType(h[0]>>4) & 0b0001111
-	if t <= RESERVED || t >= COUNT {
-		return nil, errors.New("Unknowned MQTT Control Packet type!")
+	n, err = h.flag.decode(b)
+	if err != nil {
+		return nil, err
 	}
+	b = b[n:]
 
-	f := Flag{dup: bool(h[0]&0b0100 != 0), qos: bool(h[0]&0b0010 != 0), retain: bool(h[0]&0b0001 != 0)}
-
-	var l VarByteInt
-	_, err := l.decode(h[1:])
+	n, err = h.len.decode(b)
 	if err != nil {
 		return nil, err
 	}
 
-	return &MqttHeader{ctl: t, flag: f, len: l}, nil
+	return h, nil
 }
 
 func (p *MqttHeader) BodyLength() int {
@@ -90,6 +137,14 @@ const (
 	QoS2
 	QoS3
 )
+
+func (qos QoS) maxQos() QoS {
+	return QoS0
+}
+
+func (qos QoS) isSupported() bool {
+	return qos <= qos.maxQos()
+}
 
 func (f ConnectFlag) username() bool {
 	return byte(f)&0b10000000 != 0
@@ -129,22 +184,38 @@ func (f ConnectFlag) valid() error {
 type MqttProperty byte
 
 const (
-	SessionExpiryInterval      MqttProperty = 0x11
-	ReceiveMaximum                          = 0x21
-	MaximumPacketSize                       = 0x27
-	TopicAliasMaximum                       = 0x22
-	RequestResponseInformation              = 0x19
-	RequestProblemInformation               = 0x17
-	UserProperty                            = 0x26
-	AuthenticationMethod                    = 0x15
-	AuthenticationData                      = 0x16
-	WillDelayInterval                       = 0x18
-	PayloadFormatIndicator                  = 0x01
-	MessageExpiryInterval                   = 0x02
-	ContentType                             = 0x03
-	ResponseTopic                           = 0x08
-	CorrelationData                         = 0x09
+	SessionExpiryInterval            MqttProperty = 0x11
+	ReceiveMaximum                                = 0x21
+	MaximumPacketSize                             = 0x27
+	TopicAliasMaximum                             = 0x22
+	RequestResponseInformation                    = 0x19
+	RequestProblemInformation                     = 0x17
+	UserProperty                                  = 0x26
+	AuthenticationMethod                          = 0x15
+	AuthenticationData                            = 0x16
+	WillDelayInterval                             = 0x18
+	PayloadFormatIndicator                        = 0x01
+	MessageExpiryInterval                         = 0x02
+	ContentType                                   = 0x03
+	ResponseTopic                                 = 0x08
+	CorrelationData                               = 0x09
+	MaximumQoS                                    = 0x24
+	RetainAvailable                               = 0x25
+	AssignedClientIdentifier                      = 0x12
+	ReasonString                                  = 0x1F
+	WildcardSubscriptionAvailable                 = 0x28
+	SubscriptionIdentifiersAvailable              = 0x29
+	SharedSubscriptionAvailable                   = 0x2A
+	ServerKeepAlive                               = 0x13
+	ResponseInformation                           = 0x1A
+	ServerReference                               = 0x1C
 )
+
+func (p MqttProperty) encode() []byte {
+	b := make([]byte, 1)
+	b[0] = byte(p)
+	return b
+}
 
 type ConnectProperties struct {
 	sessionExpiryInterval time.Duration
@@ -156,9 +227,12 @@ type ConnectProperties struct {
 	userProperty          UTF8StringPair
 	authenticationMethod  UTF8String
 	authenticationData    BinaryData
+
+	fields map[MqttProperty]bool
 }
 
 func (p *ConnectProperties) decode(b []byte) (int, error) {
+	p.fields = make(map[MqttProperty]bool)
 	p.sessionExpiryInterval = 0
 	p.receiveMaximum = math.MaxUint16
 	p.maximumPacketSize = math.MaxUint32
@@ -181,6 +255,11 @@ func (p *ConnectProperties) decode(b []byte) (int, error) {
 	for len(b) > 0 {
 		mProp := MqttProperty(b[0])
 		b = b[1:]
+		if p.fields[mProp] {
+			return 0, errors.New("Duplicate connect property")
+		}
+		p.fields[mProp] = true
+
 		switch mProp {
 		case SessionExpiryInterval:
 			var d FourByteInteger
@@ -354,6 +433,7 @@ type ConnectRequest struct {
 	flag      ConnectFlag
 	keepAlive time.Duration
 	prop      ConnectProperties
+	payload   ConnectPayload
 }
 
 func ParseConnect(p *MqttHeader, b []byte) (Request, error) {
@@ -390,11 +470,7 @@ func ParseConnect(p *MqttHeader, b []byte) (Request, error) {
 		return nil, err
 	}
 
-	return &ConnectRequest{flag: flag, keepAlive: keepAlive, prop: prop}, nil
-}
-
-func (r *ConnectRequest) WriteTo(w io.Writer) (int64, error) {
-	return 0, nil
+	return &ConnectRequest{flag: flag, keepAlive: keepAlive, prop: prop, payload: pl}, nil
 }
 
 type ReasonCode byte
@@ -424,15 +500,145 @@ const (
 	ExceededConnectionRate                = 0x9F
 )
 
-type ConnackProperties struct {
-	sessionExpiryInterval time.Duration
-	receiveMaximum        uint16
-	retainAvailable       bool
+func (p ReasonCode) encode() []byte {
+	b := make([]byte, 1)
+	b[0] = byte(p)
+	return b
 }
 
-func (r *ConnectRequest) Response() ([]byte, error) {
-	// ackFlag := byte(0)
-	// rc := Success
+type ConnackProperties struct {
+	sessionExpiryInterval           time.Duration
+	receiveMaximum                  TwoByteInteger
+	maximumQoS                      QoS
+	retainAvailable                 ByteInteger
+	maximumPacketSize               FourByteInteger
+	assignedClientIdentifier        UTF8String
+	topicAliasMinimum               TwoByteInteger
+	reasonString                    UTF8String
+	userProperty                    UTF8StringPair
+	wildcardSubscriptionAvailable   ByteInteger
+	subscriptionIdentifiersAvaiable ByteInteger
+	sharedSubscriptionAvaiable      ByteInteger
+	serverKeepAlive                 TwoByteInteger
+	responseInformation             UTF8String
+	serverReference                 UTF8String
+	authenticationMethod            UTF8String
+	authenticationData              BinaryData
+}
 
-	return []byte{}, nil
+func (p *ConnackProperties) encode(flag *ConnectFlag, prop *ConnectProperties) (w *bytes.Buffer, rc ReasonCode) {
+	rc = Success
+	w = bytes.NewBuffer(make([]byte, 0))
+
+	// TODO: Session Expiry Interval
+
+	// TODO: Received Maximum
+
+	if !flag.qos().isSupported() {
+		w.Write(MqttProperty(MaximumQoS).encode())
+		w.Write(ByteInteger(flag.qos().maxQos() >= QoS1).encode())
+
+		rc = QoSNotSupported
+		return
+	}
+
+	// WARNING: Should get retail available from server configuration
+	if true {
+		w.Write(MqttProperty(RetainAvailable).encode())
+		w.Write(ByteInteger(false).encode())
+
+		if flag.retain() {
+			rc = RetainNotSupported
+			return
+		}
+	}
+
+	// TODO: Maximum Packet Size
+
+	// TODO: Assigned Client Identifier
+
+	// TODO: Topic Alias Maximum
+
+	// TODO: Reason String
+
+	// TODO: User Property
+
+	// WARNING: Should get wildcard subscription available from server configuration
+	if true {
+		w.Write(MqttProperty(WildcardSubscriptionAvailable).encode())
+		w.Write(ByteInteger(false).encode())
+	}
+
+	// WARNING: Should get wildcard subscription available from server configuration
+	if true {
+		w.Write(MqttProperty(SubscriptionIdentifiersAvailable).encode())
+		w.Write(ByteInteger(false).encode())
+	}
+
+	// WARNING: Should get wildcard subscription available from server configuration
+	if true {
+		w.Write(MqttProperty(SharedSubscriptionAvailable).encode())
+		w.Write(ByteInteger(false).encode())
+	}
+
+	// TODO: Keep Alive
+
+	// TODO: Response Information
+
+	// TODO: Server Reference
+
+	// TODO: Authentication Method
+
+	// TODO: Authentication Data
+
+	return
+}
+
+func (r *ConnectRequest) Response() (w *bytes.Buffer, err error) {
+	w = bytes.NewBuffer(make([]byte, 0))
+
+	ackFlag := make([]byte, 1)
+	if !r.flag.cleanstart() == false /*&& hasSession(r.payload.clientIdentifier)*/ {
+		ackFlag[0] = 0b1
+	}
+	w.Write(ackFlag)
+
+	var prop ConnackProperties
+	buf, rc := prop.encode(&r.flag, &r.prop)
+	w.Write(rc.encode())
+
+	blen := VarByteInt(buf.Len())
+	w.Write(blen.encode())
+	w.Write(buf.Bytes())
+
+	if rc != Success {
+		err = errors.New("Unsupported Connect Propeties")
+		return
+	}
+
+	return
+}
+
+func (r *ConnectRequest) WriteTo(w io.Writer) (int64, error) {
+	wBytes := 0
+
+	body, err := r.Response()
+	if err != nil {
+		return 0, err
+	}
+	header := MqttHeader{ctl: CONNACK, flag: Flag{}, len: VarByteInt(body.Len())}
+
+	n, err := w.Write(header.encode())
+	if err != nil {
+		return 0, err
+	}
+	wBytes += n
+
+	n, err = w.Write(body.Bytes())
+	if err != nil {
+		return 0, err
+	}
+	wBytes += n
+
+	return int64(wBytes), nil
 }
