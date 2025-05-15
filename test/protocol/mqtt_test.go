@@ -37,14 +37,17 @@ func TestConnectPacket(t *testing.T) {
 
 	buf.Reset()
 	req.WriteTo(&buf)
-	ack, err := packets.ReadPacket(&buf)
+	recv, err := packets.ReadPacket(&buf)
 	if err != nil {
 		t.Error(err)
 		t.FailNow()
 	}
-	if ack.Type != packets.CONNACK {
-		t.Error("Expected CONNACK got", ack.PacketType())
+	ack, ok := recv.Content.(*packets.Connack)
+	if recv.Type != packets.CONNACK || !ok {
+		t.Error("Expected CONNACK got", recv.PacketType())
+		t.FailNow()
 	}
+	testConnackProp(ack, t)
 
 	buf.Reset()
 	buf.Write([]byte{16, 38, 0, 4, 77, 81, 84, 84, 5, 128, 0, 30, 5, 17, 0, 0, 0, 30, 0, 10, 116, 101, 115, 116, 67, 108, 105, 101, 110, 116, 0, 8, 116, 101, 115, 116, 85, 115, 101, 114})
@@ -55,14 +58,17 @@ func TestConnectPacket(t *testing.T) {
 
 	buf.Reset()
 	req.WriteTo(&buf)
-	ack, err = packets.ReadPacket(&buf)
+	recv, err = packets.ReadPacket(&buf)
 	if err != nil {
 		t.Error(err)
 		t.FailNow()
 	}
-	if ack.Type != packets.CONNACK {
-		t.Error("Expected CONNACK got", ack.PacketType())
+	ack, ok = recv.Content.(*packets.Connack)
+	if recv.Type != packets.CONNACK || !ok {
+		t.Error("Expected CONNACK got", recv.PacketType())
+		t.FailNow()
 	}
+	testConnackProp(ack, t)
 }
 
 func parsePacket(b []byte) (protocol.Request, error) {
@@ -77,4 +83,19 @@ func parsePacket(b []byte) (protocol.Request, error) {
 	}
 
 	return r, nil
+}
+
+func testConnackProp(pkt *packets.Connack, t *testing.T) {
+	if *pkt.Properties.RetainAvailable == 1 {
+		t.Error("Expected retain should be unvailable")
+	}
+	if *pkt.Properties.SubIDAvailable == 1 {
+		t.Error("Expected subscription identifiers should be unvailable")
+	}
+	if *pkt.Properties.WildcardSubAvailable == 1 {
+		t.Error("Expected wildcard subscriptions should be unvailable")
+	}
+	if *pkt.Properties.SharedSubAvailable == 1 {
+		t.Error("Expected shared subscriptions should be unvailable")
+	}
 }
