@@ -13,7 +13,7 @@ func (v *VarByteInt) Add(n int) {
 	*v += VarByteInt(n)
 }
 
-func (v VarByteInt) encode() []byte {
+func (v VarByteInt) encode() *bytes.Buffer {
 	encodedByte := uint32(0)
 	for {
 		encodedByte = uint32(v % 128)
@@ -26,7 +26,9 @@ func (v VarByteInt) encode() []byte {
 	}
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint32(b, encodedByte)
-	return bytes.Trim(b, "\x00")
+	b = bytes.Trim(b, "\x00")
+
+	return bytes.NewBuffer(b)
 }
 
 func (v *VarByteInt) decode(b []byte) (int, error) {
@@ -125,14 +127,14 @@ func (v *BinaryData) decode(b []byte) (int, error) {
 
 type ByteInteger bool
 
-func (v ByteInteger) encode() []byte {
-	b := make([]byte, 1)
+func (v ByteInteger) encode() *bytes.Buffer {
+	w := bytes.NewBuffer(make([]byte, 0))
 	if v {
-		b[0] = 0b1
+		w.WriteByte(0b1)
 	} else {
-		b[0] = 0b0
+		w.WriteByte(0b0)
 	}
-	return b
+	return w
 }
 
 func (v *ByteInteger) decode(b []byte) (int, error) {

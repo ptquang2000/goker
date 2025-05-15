@@ -39,7 +39,7 @@ func TestConnectPacket(t *testing.T) {
 	req.WriteTo(&buf)
 	recv, err := packets.ReadPacket(&buf)
 	if err != nil {
-		t.Error(err)
+		t.Error("Expected ", []byte{32, 11, 0, 0, 8, 3, 7, 0, 4, 0, 0, 41, 0, 42, 0}, ", got ", buf)
 		t.FailNow()
 	}
 	ack, ok := recv.Content.(*packets.Connack)
@@ -60,7 +60,7 @@ func TestConnectPacket(t *testing.T) {
 	req.WriteTo(&buf)
 	recv, err = packets.ReadPacket(&buf)
 	if err != nil {
-		t.Error(err)
+		t.Error("Expected ", []byte{32, 11, 0, 0, 8, 3, 7, 0, 4, 0, 0, 41, 0, 42, 0}, ", got ", buf)
 		t.FailNow()
 	}
 	ack, ok = recv.Content.(*packets.Connack)

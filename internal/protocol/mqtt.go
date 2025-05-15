@@ -13,7 +13,7 @@ type FixedHeader [2]byte
 
 const FixedHeaderLen = len(FixedHeader{})
 
-type CType uint8
+type CType byte
 
 const (
 	RESERVED CType = iota
@@ -35,10 +35,10 @@ const (
 	COUNT
 )
 
-func (t CType) encode() []byte {
-	b := make([]byte, 1)
-	b[0] = byte(t << 4)
-	return b
+func (t CType) encode() *bytes.Buffer {
+	w := bytes.NewBuffer(make([]byte, 0))
+	w.WriteByte(byte(t << 4))
+	return w
 }
 
 func (t *CType) decode(b []byte) (int, error) {
@@ -58,19 +58,20 @@ type Flag struct {
 	retain bool
 }
 
-func (f Flag) encode() []byte {
-	b := make([]byte, 1)
-	b[0] = 0
+func (f Flag) encode() *bytes.Buffer {
+	w := bytes.NewBuffer(make([]byte, 0))
+	var b byte
 	if f.dup {
-		b[0] |= 0b0100
+		b |= 0b0100
 	}
 	if f.qos {
-		b[0] |= 0b0010
+		b |= 0b0010
 	}
 	if f.dup {
-		b[0] |= 0b0001
+		b |= 0b0001
 	}
-	return b
+	w.WriteByte(b)
+	return w
 }
 
 func (f *Flag) decode(b []byte) (int, error) {
@@ -87,11 +88,13 @@ type MqttHeader struct {
 	len  VarByteInt
 }
 
-func (h MqttHeader) encode() []byte {
-	b := make([]byte, 2)
-	b[0] = h.ctl.encode()[0] | h.flag.encode()[0]
-	b[1] = h.len.encode()[0]
-	return b
+func (h MqttHeader) encode() *bytes.Buffer {
+	w := bytes.NewBuffer(make([]byte, 0))
+	ctl, _ := h.ctl.encode().ReadByte()
+	flag, _ := h.flag.encode().ReadByte()
+	w.WriteByte(ctl | flag)
+	h.len.encode().WriteTo(w)
+	return w
 }
 
 func ParseHeader(b []byte) (RequestHeader, error) {
@@ -211,10 +214,10 @@ const (
 	ServerReference                               = 0x1C
 )
 
-func (p MqttProperty) encode() []byte {
-	b := make([]byte, 1)
-	b[0] = byte(p)
-	return b
+func (p MqttProperty) encode() *bytes.Buffer {
+	w := bytes.NewBuffer(make([]byte, 0))
+	w.WriteByte(byte(p))
+	return w
 }
 
 type ConnectProperties struct {
@@ -500,10 +503,10 @@ const (
 	ExceededConnectionRate                = 0x9F
 )
 
-func (p ReasonCode) encode() []byte {
-	b := make([]byte, 1)
-	b[0] = byte(p)
-	return b
+func (p ReasonCode) encode() *bytes.Buffer {
+	w := bytes.NewBuffer(make([]byte, 0))
+	w.WriteByte(byte(p))
+	return w
 }
 
 type ConnackProperties struct {
@@ -535,8 +538,8 @@ func (p *ConnackProperties) encode(flag *ConnectFlag, prop *ConnectProperties) (
 	// TODO: Received Maximum
 
 	if !flag.qos().isSupported() {
-		w.Write(MqttProperty(MaximumQoS).encode())
-		w.Write(ByteInteger(flag.qos().maxQos() >= QoS1).encode())
+		MqttProperty(MaximumQoS).encode().WriteTo(w)
+		ByteInteger(flag.qos().maxQos() >= QoS1).encode().WriteTo(w)
 
 		rc = QoSNotSupported
 		return
@@ -544,8 +547,8 @@ func (p *ConnackProperties) encode(flag *ConnectFlag, prop *ConnectProperties) (
 
 	// WARNING: Should get retail available from server configuration
 	if true {
-		w.Write(MqttProperty(RetainAvailable).encode())
-		w.Write(ByteInteger(false).encode())
+		MqttProperty(RetainAvailable).encode().WriteTo(w)
+		ByteInteger(false).encode().WriteTo(w)
 
 		if flag.retain() {
 			rc = RetainNotSupported
@@ -565,20 +568,20 @@ func (p *ConnackProperties) encode(flag *ConnectFlag, prop *ConnectProperties) (
 
 	// WARNING: Should get wildcard subscription available from server configuration
 	if true {
-		w.Write(MqttProperty(WildcardSubscriptionAvailable).encode())
-		w.Write(ByteInteger(false).encode())
+		MqttProperty(WildcardSubscriptionAvailable).encode().WriteTo(w)
+		ByteInteger(false).encode().WriteTo(w)
 	}
 
 	// WARNING: Should get wildcard subscription available from server configuration
 	if true {
-		w.Write(MqttProperty(SubscriptionIdentifiersAvailable).encode())
-		w.Write(ByteInteger(false).encode())
+		MqttProperty(SubscriptionIdentifiersAvailable).encode().WriteTo(w)
+		ByteInteger(false).encode().WriteTo(w)
 	}
 
 	// WARNING: Should get wildcard subscription available from server configuration
 	if true {
-		w.Write(MqttProperty(SharedSubscriptionAvailable).encode())
-		w.Write(ByteInteger(false).encode())
+		MqttProperty(SharedSubscriptionAvailable).encode().WriteTo(w)
+		ByteInteger(false).encode().WriteTo(w)
 	}
 
 	// TODO: Keep Alive
@@ -605,11 +608,11 @@ func (r *ConnectRequest) Response() (w *bytes.Buffer, err error) {
 
 	var prop ConnackProperties
 	buf, rc := prop.encode(&r.flag, &r.prop)
-	w.Write(rc.encode())
+	rc.encode().WriteTo(w)
 
 	blen := VarByteInt(buf.Len())
-	w.Write(blen.encode())
-	w.Write(buf.Bytes())
+	blen.encode().WriteTo(w)
+	buf.WriteTo(w)
 
 	if rc != Success {
 		err = errors.New("Unsupported Connect Propeties")
@@ -620,7 +623,7 @@ func (r *ConnectRequest) Response() (w *bytes.Buffer, err error) {
 }
 
 func (r *ConnectRequest) WriteTo(w io.Writer) (int64, error) {
-	wBytes := 0
+	wBytes := int64(0)
 
 	body, err := r.Response()
 	if err != nil {
@@ -628,13 +631,13 @@ func (r *ConnectRequest) WriteTo(w io.Writer) (int64, error) {
 	}
 	header := MqttHeader{ctl: CONNACK, flag: Flag{}, len: VarByteInt(body.Len())}
 
-	n, err := w.Write(header.encode())
+	n, err := header.encode().WriteTo(w)
 	if err != nil {
 		return 0, err
 	}
 	wBytes += n
 
-	n, err = w.Write(body.Bytes())
+	n, err = body.WriteTo(w)
 	if err != nil {
 		return 0, err
 	}
