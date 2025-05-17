@@ -10,9 +10,9 @@ import (
 )
 
 func TestConnectPacket(t *testing.T) {
-	var buf bytes.Buffer
+	buf := bytes.NewBuffer(make([]byte, 0))
 
-	_, err := protocol.ParseHeader(buf.Bytes())
+	_, err := protocol.ParseHeader(buf)
 	if err == nil {
 		t.Error("Missing empty buffer case")
 		t.FailNow()
@@ -29,15 +29,16 @@ func TestConnectPacket(t *testing.T) {
 	cpp := cp.Packet()
 	cpp.ProtocolName = "MQTT"
 	cpp.ProtocolVersion = 5
-	cpp.WriteTo(&buf)
-	req, err := parsePacket(buf.Bytes())
+	cpp.WriteTo(buf)
+	req, err := parsePacket(buf)
 	if err != nil {
 		t.Error(err)
+		t.FailNow()
 	}
 
 	buf.Reset()
-	req.WriteTo(&buf)
-	recv, err := packets.ReadPacket(&buf)
+	req.WriteTo(buf)
+	recv, err := packets.ReadPacket(buf)
 	if err != nil {
 		t.Error("Expected ", []byte{32, 11, 0, 0, 8, 3, 7, 0, 4, 0, 0, 41, 0, 42, 0}, ", got ", buf)
 		t.FailNow()
@@ -51,14 +52,14 @@ func TestConnectPacket(t *testing.T) {
 
 	buf.Reset()
 	buf.Write([]byte{16, 38, 0, 4, 77, 81, 84, 84, 5, 128, 0, 30, 5, 17, 0, 0, 0, 30, 0, 10, 116, 101, 115, 116, 67, 108, 105, 101, 110, 116, 0, 8, 116, 101, 115, 116, 85, 115, 101, 114})
-	req, err = parsePacket(buf.Bytes())
+	req, err = parsePacket(buf)
 	if err != nil {
 		t.Error(err)
 	}
 
 	buf.Reset()
-	req.WriteTo(&buf)
-	recv, err = packets.ReadPacket(&buf)
+	req.WriteTo(buf)
+	recv, err = packets.ReadPacket(buf)
 	if err != nil {
 		t.Error("Expected ", []byte{32, 11, 0, 0, 8, 3, 7, 0, 4, 0, 0, 41, 0, 42, 0}, ", got ", buf)
 		t.FailNow()
@@ -71,18 +72,18 @@ func TestConnectPacket(t *testing.T) {
 	testConnackProp(ack, t)
 }
 
-func parsePacket(b []byte) (protocol.Request, error) {
-	p, err := protocol.ParseHeader(b[:2])
+func parsePacket(r *bytes.Buffer) (protocol.Request, error) {
+	p, err := protocol.ParseHeader(r)
 	if err != nil {
 		return nil, err
 	}
 
-	r, err := p.Parse(b[2:])
+	req, err := p.Parse(r)
 	if err != nil {
 		return nil, err
 	}
 
-	return r, nil
+	return req, nil
 }
 
 func testConnackProp(pkt *packets.Connack, t *testing.T) {

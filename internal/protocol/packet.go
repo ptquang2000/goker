@@ -1,11 +1,14 @@
 package protocol
 
-import "io"
+import (
+	"bytes"
+	"io"
+)
 
 type Request interface {
 	WriteTo(io.Writer) (int64, error)
 }
 type RequestHeader interface {
-	Parse([]byte) (Request, error)
+	Parse(*bytes.Buffer) (Request, error)
 	BodyLength() int
 }

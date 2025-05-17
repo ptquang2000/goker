@@ -97,21 +97,22 @@ func (h MqttHeader) encode() *bytes.Buffer {
 	return w
 }
 
-func ParseHeader(b []byte) (RequestHeader, error) {
+func ParseHeader(r *bytes.Buffer) (RequestHeader, error) {
 	h := &MqttHeader{}
 
-	n, err := h.ctl.decode(b)
+	b, err := r.ReadByte()
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Malformed Fixed Header")
 	}
-	n, err = h.flag.decode(b)
-	if err != nil {
-		return nil, err
-	}
-	b = b[n:]
 
-	n, err = h.len.decode(b)
-	if err != nil {
+	h.ctl = CType(b>>4) & 0b0001111
+	if h.ctl <= RESERVED || h.ctl >= COUNT {
+		return nil, errors.New("Unknowned MQTT Control Packet type!")
+	}
+
+	h.flag = Flag{dup: bool(b&0b0100 != 0), qos: bool(b&0b0010 != 0), retain: bool(b&0b0001 != 0)}
+
+	if h.len.decode(r) != nil {
 		return nil, err
 	}
 
@@ -122,10 +123,10 @@ func (p *MqttHeader) BodyLength() int {
 	return int(p.len)
 }
 
-func (p *MqttHeader) Parse(b []byte) (Request, error) {
+func (p *MqttHeader) Parse(r *bytes.Buffer) (Request, error) {
 	switch p.ctl {
 	case CONNECT:
-		return ParseConnect(p, b)
+		return ParseConnect(p, r)
 	default:
 		return nil, errors.New("Unsupported MQTT packet control")
 	}
@@ -234,7 +235,7 @@ type ConnectProperties struct {
 	fields map[MqttProperty]bool
 }
 
-func (p *ConnectProperties) decode(b []byte) (int, error) {
+func (p *ConnectProperties) decode(r *bytes.Buffer) error {
 	p.fields = make(map[MqttProperty]bool)
 	p.sessionExpiryInterval = 0
 	p.receiveMaximum = math.MaxUint16
@@ -244,71 +245,71 @@ func (p *ConnectProperties) decode(b []byte) (int, error) {
 	p.requestProblemInfo = true
 
 	var propLen VarByteInt
-	rBytes, err := propLen.decode(b)
+	err := propLen.decode(r)
 	if err != nil {
-		return 0, err
-	} else if len(b) < rBytes+int(propLen) {
-		return rBytes, errors.New("Invalid Conenct Property Length.")
+		return err
+	} else if r.Len() < int(propLen) {
+		return errors.New("Invalid Conenct Property Length.")
 	} else if propLen == 0 {
-		return rBytes, nil
+		return nil
 	}
 
-	b = b[rBytes : rBytes+int(propLen)]
-	var n int
-	for len(b) > 0 {
-		mProp := MqttProperty(b[0])
-		b = b[1:]
+	remain := r.Len()
+	for remain-r.Len() < int(propLen) {
+		b, err := r.ReadByte()
+		if err != nil {
+			return err
+		}
+		mProp := MqttProperty(b)
 		if p.fields[mProp] {
-			return 0, errors.New("Duplicate connect property")
+			return errors.New("Duplicate connect property")
 		}
 		p.fields[mProp] = true
 
 		switch mProp {
 		case SessionExpiryInterval:
 			var d FourByteInteger
-			if n, err = d.decode(b); err != nil {
-				return 0, errors.New("Invalid Session Expiry Interval, err:" + err.Error())
+			if err = d.decode(r); err != nil {
+				return errors.New("Invalid Session Expiry Interval, err:" + err.Error())
 			}
 			p.sessionExpiryInterval = time.Duration(d) * time.Second
 		case ReceiveMaximum:
-			if n, err = p.receiveMaximum.decode(b); err != nil {
-				return 0, errors.New("Invalid Receive Maximum, err:" + err.Error())
+			if err = p.receiveMaximum.decode(r); err != nil {
+				return errors.New("Invalid Receive Maximum, err:" + err.Error())
 			}
 		case MaximumPacketSize:
-			if n, err = p.maximumPacketSize.decode(b); err != nil {
-				return 0, errors.New("Invalid Maximum Packet Size, err:" + err.Error())
+			if err = p.maximumPacketSize.decode(r); err != nil {
+				return errors.New("Invalid Maximum Packet Size, err:" + err.Error())
 			}
 		case TopicAliasMaximum:
-			if n, err = p.topicAliasMaximum.decode(b); err != nil {
-				return 0, errors.New("Invalid Topic Alias Maximum")
+			if err = p.topicAliasMaximum.decode(r); err != nil {
+				return errors.New("Invalid Topic Alias Maximum")
 			}
 		case RequestResponseInformation:
-			if n, err = p.requestProblemInfo.decode(b); err != nil {
-				return 0, errors.New("Invalid Request Response Information, err:" + err.Error())
+			if err = p.requestProblemInfo.decode(r); err != nil {
+				return errors.New("Invalid Request Response Information, err:" + err.Error())
 			}
 		case RequestProblemInformation:
-			if n, err = p.requestProblemInfo.decode(b); err != nil {
-				return 0, errors.New("Invalid Request Problem Information, err:" + err.Error())
+			if err = p.requestProblemInfo.decode(r); err != nil {
+				return errors.New("Invalid Request Problem Information, err:" + err.Error())
 			}
 		case UserProperty:
-			if n, err = p.userProperty.decode(b); err != nil {
-				return 0, errors.New("Invalid User Property, err:" + err.Error())
+			if err = p.userProperty.decode(r); err != nil {
+				return errors.New("Invalid User Property, err:" + err.Error())
 			}
 		case AuthenticationMethod:
-			if n, err = p.authenticationMethod.decode(b); err != nil {
-				return 0, errors.New("Invalid Authentication Method" + err.Error())
+			if err = p.authenticationMethod.decode(r); err != nil {
+				return errors.New("Invalid Authentication Method" + err.Error())
 			}
 		case AuthenticationData:
-			if n, err = p.authenticationData.decode(b); err != nil {
-				return 0, errors.New("Invalid Authentication Data" + err.Error())
+			if err = p.authenticationData.decode(r); err != nil {
+				return errors.New("Invalid Authentication Data" + err.Error())
 			}
 		default:
-			return 0, errors.New("Unknown connect packet property")
+			return errors.New("Unknown connect packet property")
 		}
-		b = b[n:]
-		rBytes += 1 + n
 	}
-	return rBytes, nil
+	return nil
 }
 
 type WillProperties struct {
@@ -321,65 +322,65 @@ type WillProperties struct {
 	userProperty           UTF8StringPair
 }
 
-func (p *WillProperties) decode(b []byte) (int, error) {
+func (p *WillProperties) decode(r *bytes.Buffer) error {
 	p.delayInterval = 0
 	p.payloadFormatIndicator = false
 
-	var pLen VarByteInt
-	rBytes, err := pLen.decode(b)
+	var propLen VarByteInt
+	err := propLen.decode(r)
 	if err != nil {
-		return 0, errors.New("Unable to decode will property length.")
-	} else if len(b) < rBytes+int(pLen) {
-		return rBytes, errors.New("Invalid Conenct Property Length.")
-	} else if pLen == 0 {
-		return rBytes, nil
+		return errors.New("Unable to decode will property length.")
+	} else if r.Len() < int(propLen) {
+		return errors.New("Invalid Will Properties Length.")
+	} else if propLen == 0 {
+		return nil
 	}
-	b = b[rBytes : rBytes+int(pLen)]
 
-	var n int
-	for len(b) > 0 {
-		mProp := MqttProperty(b[0])
-		b = b[1:]
+	remain := r.Len()
+	for remain-r.Len() < int(propLen) {
+		b, err := r.ReadByte()
+		if err != nil {
+			return err
+		}
+		mProp := MqttProperty(b)
 		switch mProp {
 		case WillDelayInterval:
 			var d FourByteInteger
-			if n, err = d.decode(b); err != nil {
-				return 0, errors.New("Invalid Will Delay Interval, err:" + err.Error())
+			if err = d.decode(r); err != nil {
+				return errors.New("Invalid Will Delay Interval, err:" + err.Error())
 			}
 			p.delayInterval = time.Duration(d) * time.Second
 		case PayloadFormatIndicator:
-			if n, err = p.payloadFormatIndicator.decode(b); err != nil {
-				return 0, errors.New("Invalid Payload Format Indicator, err:" + err.Error())
+			if err = p.payloadFormatIndicator.decode(r); err != nil {
+				return errors.New("Invalid Payload Format Indicator, err:" + err.Error())
 			}
 		case MessageExpiryInterval:
 			var d FourByteInteger
-			if n, err = d.decode(b); err != nil {
-				return 0, errors.New("Invalid Will Message Expiration Interval, err:" + err.Error())
+			if err = d.decode(r); err != nil {
+				return errors.New("Invalid Will Message Expiration Interval, err:" + err.Error())
 			}
 			p.messageExpiryInterval = time.Duration(d) * time.Second
 		case ContentType:
-			if n, err = p.contentType.decode(b); err != nil {
-				return 0, errors.New("Invalid Will Content Type, err:" + err.Error())
+			if err = p.contentType.decode(r); err != nil {
+				return errors.New("Invalid Will Content Type, err:" + err.Error())
 			}
 		case ResponseTopic:
-			if n, err = p.responseTopic.decode(b); err != nil {
-				return 0, errors.New("Invalid Response Topic, err:" + err.Error())
+			if err = p.responseTopic.decode(r); err != nil {
+				return errors.New("Invalid Response Topic, err:" + err.Error())
 			}
 		case CorrelationData:
-			if n, err = p.correlationData.decode(b); err != nil {
-				return 0, errors.New("Invalid Correlation Data, err:" + err.Error())
+			if err = p.correlationData.decode(r); err != nil {
+				return errors.New("Invalid Correlation Data, err:" + err.Error())
 			}
 		case UserProperty:
-			if n, err = p.userProperty.decode(b); err != nil {
-				return 0, errors.New("Invalid User Property, err:" + err.Error())
+			if err = p.userProperty.decode(r); err != nil {
+				return errors.New("Invalid User Property, err:" + err.Error())
 			}
 		default:
-			return 0, errors.New("Unknown connect will property")
+			return errors.New("Unknown connect will property")
 		}
-		b = b[n:]
-		rBytes += 1 + n
 	}
-	return rBytes, nil
+	return nil
 }
 
 type ConnectPayload struct {
@@ -391,42 +392,35 @@ type ConnectPayload struct {
 	password         BinaryData
 }
 
-func (pl *ConnectPayload) decode(f *ConnectFlag, b []byte) error {
-	n, err := pl.clientIdentifier.decode(b)
-	if err != nil {
+func (pl *ConnectPayload) decode(f *ConnectFlag, r *bytes.Buffer) error {
+	if err := pl.clientIdentifier.decode(r); err != nil {
 		return err
 	}
-	b = b[n:]
 
 	if f.will() {
-		if n, err = pl.willProperties.decode(b); err != nil {
+		if err := pl.willProperties.decode(r); err != nil {
 			return err
 		}
-		b = b[n:]
 
-		if n, err = pl.willTopic.decode(b); err != nil {
+		if err := pl.willTopic.decode(r); err != nil {
 			return err
 		}
-		b = b[n:]
 
-		if n, err = pl.willPayload.decode(b); err != nil {
+		if err := pl.willPayload.decode(r); err != nil {
 			return err
 		}
-		b = b[n:]
 	}
 
 	if f.username() {
-		if n, err = pl.username.decode(b); err != nil {
+		if err := pl.username.decode(r); err != nil {
 			return err
 		}
-		b = b[n:]
 	}
 
 	if f.password() {
-		if n, err = pl.password.decode(b); err != nil {
+		if err := pl.password.decode(r); err != nil {
 			return err
 		}
-		b = b[n:]
 	}
 
 	return nil
@@ -439,37 +433,43 @@ type ConnectRequest struct {
 	payload   ConnectPayload
 }
 
-func ParseConnect(p *MqttHeader, b []byte) (Request, error) {
+func ParseConnect(p *MqttHeader, r *bytes.Buffer) (Request, error) {
+	var b []byte
+
 	name := []byte{0, 4, 'M', 'Q', 'T', 'T'}
-	if !bytes.Equal(name, b[:len(name)]) {
+	b = make([]byte, len(name))
+	if _, err := r.Read(b); err != nil || !bytes.Equal(name, b) {
 		return nil, errors.New("Unsupported protocol!")
 	}
-	b = b[len(name):]
 
 	ver := []byte{5}
-	if !bytes.Equal(ver, b[:len(ver)]) {
+	b = make([]byte, len(ver))
+	if _, err := r.Read(b); err != nil || !bytes.Equal(ver, b) {
 		return nil, errors.New("Unsupported protocol!")
 	}
-	b = b[len(ver):]
 
+	b = make([]byte, 1)
+	if _, err := r.Read(b); err != nil {
+		return nil, errors.New("Missing flag value.")
+	}
 	flag := ConnectFlag(b[0])
 	if err := flag.valid(); err != nil {
 		return nil, err
 	}
-	b = b[flag.size():]
 
-	keepAlive := time.Duration(binary.BigEndian.Uint16(b[:2])) * time.Second
-	b = b[2:]
+	b = make([]byte, 2)
+	if _, err := r.Read(b); err != nil {
+		return nil, errors.New("Missing keep alive value.")
+	}
+	keepAlive := time.Duration(binary.BigEndian.Uint16(b)) * time.Second
 
 	var prop ConnectProperties
-	n, err := prop.decode(b)
-	if err != nil {
+	if err := prop.decode(r); err != nil {
 		return nil, err
 	}
-	b = b[n:]
 
 	var pl ConnectPayload
-	if err = pl.decode(&flag, b); err != nil {
+	if err := pl.decode(&flag, r); err != nil {
 		return nil, err
 	}
 

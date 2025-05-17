@@ -20,17 +20,12 @@ func ListenAndServe() {
 }
 
 func clientHandle(c net.Conn) {
-	h := make([]byte, protocol.FixedHeaderLen)
 	defer c.Close()
 
 	for {
-		n, err := c.Read(h)
-		if n != protocol.FixedHeaderLen || err != nil {
-			utils.LogError("Failed to read header, read: ", n, ", err:", err)
-			return
-		}
+		var h protocol.MqttHeader
 
-		p, err := protocol.ParseHeader(h)
+		p, err := protocol.ParseHeader()
 		if err != nil {
 			utils.LogError(err != nil, "Failed to parse header, err:", err)
 			return

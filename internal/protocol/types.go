@@ -31,98 +31,86 @@ func (v VarByteInt) encode() *bytes.Buffer {
 	return bytes.NewBuffer(b)
 }
 
-func (v *VarByteInt) decode(b []byte) (int, error) {
+func (v *VarByteInt) decode(r *bytes.Buffer) error {
 	multiplier := uint32(1)
 	x := uint32(0)
-	n := 0
 	var encodedByte uint32
 	for {
-		if multiplier > 128*128*128 || n >= len(b) {
-			return 0, errors.New("Unable to decode Variable Byte Integer")
+		b, err := r.ReadByte()
+		if multiplier > 128*128*128 || err != nil {
+			return errors.New("Unable to decode Variable Byte Integer")
 		}
-		encodedByte = uint32(b[n])
+		encodedByte = uint32(b)
 		x += (encodedByte & 127) * multiplier
 
 		multiplier *= 128
-		n += 1
 		if (encodedByte & 128) == 0 {
 			break
 		}
 	}
 	*v = VarByteInt(x)
-	return n, nil
+	return nil
 }
 
 type UTF8String string
 
-func (v *UTF8String) decode(b []byte) (int, error) {
+func (v *UTF8String) decode(r *bytes.Buffer) error {
 	*v = ""
-	if len(b) < 2 {
-		return 0, errors.New("Unable to decode UTF-8 string.")
+	b := make([]byte, 2)
+	if _, err := r.Read(b); err != nil {
+		return errors.New("Unable to decode UTF-8 string.")
 	}
-
-	slen := binary.BigEndian.Uint16(b[:2])
+	slen := binary.BigEndian.Uint16(b)
 	if slen == 0 {
-		return 2, nil
-	}
-	b = b[2:]
-
-	if len(b) < int(slen) {
-		return 0, errors.New("Unable to decode UTF-8 string.")
-	}
-	b = b[:slen]
-
-	if !utf8.Valid(b) {
-		return 0, errors.New("Unable to decode UTF-8 string.")
+		return nil
 	}
 
-	n := 0
-	for n < len(b) {
-		r, size := utf8.DecodeRune(b[n:])
-		if r == utf8.RuneError {
+	if r.Len() < int(slen) {
+		return errors.New("UTF-8 string doesn't match set length.")
+	} else if !utf8.Valid(r.Bytes()) {
+		return errors.New("UTF-8 string is not valid utf-8.")
+	}
+
+	remain := r.Len()
+	for remain-r.Len() < int(slen) {
+		rune, size := utf8.DecodeRune(r.Bytes())
+		if rune == utf8.RuneError {
 			continue
 		}
-		*v += UTF8String(r)
-		n += size
+		*v += UTF8String(rune)
+		r.Next(size)
 	}
-	return 2 + n, nil
+	return nil
 }
 
-type UTF8StringPair []string
+type UTF8StringPair struct {
+	key   UTF8String
+	value UTF8String
+}
 
-func (v *UTF8StringPair) decode(b []byte) (int, error) {
-	*v = []string{}
-	if len(b) < 4 {
-		return 0, errors.New("Unable to decode UTF-8 string pair.")
+func (v *UTF8StringPair) decode(r *bytes.Buffer) error {
+	if err := v.key.decode(r); err != nil {
+		return errors.New("Unable to decode key in UTF-8 string pair, err:" + err.Error())
 	}
-
-	rBytes := 0
-	for len(*v) <= 2 && len(b[rBytes:]) >= 2 {
-		var s UTF8String
-		n, err := s.decode(b)
-		if err != nil {
-			return 0, err
-		}
-
-		*v = append(*v, string(s))
-		rBytes += n
+	if err := v.value.decode(r); err != nil {
+		return errors.New("Unable to decode value in UTF-8 string pair, err:" + err.Error())
 	}
-
-	if len(*v) != 2 {
-		return 0, errors.New("Unable to decode UTF-8 string pair.")
-	}
-	return rBytes, nil
+	return nil
 }
 
 type BinaryData []byte
 
-func (v *BinaryData) decode(b []byte) (int, error) {
-	if len(b) < 2 {
-		return 0, errors.New("Unable to decode BinaryData.")
+func (v *BinaryData) decode(r *bytes.Buffer) error {
+	b := make([]byte, 2)
+	if _, err := r.Read(b); err != nil {
+		return errors.New("Unable to decode BinaryData.")
 	}
-	vLen := binary.BigEndian.Uint16(b[:2])
-	*v = bytes.Clone(b[2 : 2+vLen])
-	return int(vLen) + 2, nil
+	vLen := binary.BigEndian.Uint16(b)
+	*v = make([]byte, vLen)
+	if _, err := r.Read(*v); err != nil {
+		return errors.New("Unable to decode BinaryData.")
+	}
+	return nil
 }
 
 type ByteInteger bool
@@ -137,36 +125,33 @@ func (v ByteInteger) encode() *bytes.Buffer {
 	return w
 }
 
-func (v *ByteInteger) decode(b []byte) (int, error) {
-	if len(b) < 1 {
-		return 0, errors.New("Unable to decode Byte Integer.")
-	}
-	b = b[:1]
-	if b[0] > 1 {
-		return 0, errors.New("Invalid Byte Integer value.")
+func (v *ByteInteger) decode(r *bytes.Buffer) error {
+	b := make([]byte, 1)
+	if _, err := r.Read(b); err != nil || b[0] >= 1 {
+		return errors.New("Unable to decode Byte Integer.")
 	}
 	*v = ByteInteger(b[0] == 1)
-	return len(b), nil
+	return nil
 }
 
 type TwoByteInteger uint16
 
-func (v *TwoByteInteger) decode(b []byte) (int, error) {
-	if len(b) < 2 {
-		return 0, errors.New("Unable to decode Two Byte Integer.")
+func (v *TwoByteInteger) decode(r *bytes.Buffer) error {
+	b := make([]byte, 2)
+	if _, err := r.Read(b); err != nil {
+		return errors.New("Unable to decode Two Byte Integer.")
 	}
-	b = b[:2]
 	*v = TwoByteInteger(binary.BigEndian.Uint16(b))
-	return len(b), nil
+	return nil
 }
 
 type FourByteInteger uint32
 
-func (v *FourByteInteger) decode(b []byte) (int, error) {
-	if len(b) < 4 {
-		return 0, errors.New("Unable to decode Two Byte Integer.")
+func (v *FourByteInteger) decode(r *bytes.Buffer) error {
+	b := make([]byte, 4)
+	if _, err := r.Read(b); err != nil {
+		return errors.New("Unable to decode Two Byte Integer.")
 	}
-	b = b[:4]
 	*v = FourByteInteger(binary.BigEndian.Uint32(b))
-	return len(b), nil
+	return nil
 }
