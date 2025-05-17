@@ -37,7 +37,7 @@ func TestConnectPacket(t *testing.T) {
 	}
 
 	buf.Reset()
-	req.WriteTo(buf)
+	req.ResponseTo(buf)
 	recv, err := packets.ReadPacket(buf)
 	if err != nil {
 		t.Error("Expected ", []byte{32, 11, 0, 0, 8, 3, 7, 0, 4, 0, 0, 41, 0, 42, 0}, ", got ", buf)
@@ -58,7 +58,7 @@ func TestConnectPacket(t *testing.T) {
 	}
 
 	buf.Reset()
-	req.WriteTo(buf)
+	req.ResponseTo(buf)
 	recv, err = packets.ReadPacket(buf)
 	if err != nil {
 		t.Error("Expected ", []byte{32, 11, 0, 0, 8, 3, 7, 0, 4, 0, 0, 41, 0, 42, 0}, ", got ", buf)
@@ -78,7 +78,7 @@ func parsePacket(r *bytes.Buffer) (protocol.Request, error) {
 		return nil, err
 	}
 
-	req, err := p.Parse(r)
+	req, err := p.ParseBody(r)
 	if err != nil {
 		return nil, err
 	}

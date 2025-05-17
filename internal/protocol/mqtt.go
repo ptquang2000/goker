@@ -123,7 +123,7 @@ func (p *MqttHeader) BodyLength() int {
 	return int(p.len)
 }
 
-func (p *MqttHeader) Parse(r *bytes.Buffer) (Request, error) {
+func (p *MqttHeader) ParseBody(r *bytes.Buffer) (Request, error) {
 	switch p.ctl {
 	case CONNECT:
 		return ParseConnect(p, r)
@@ -622,7 +622,7 @@ func (r *ConnectRequest) Response() (w *bytes.Buffer, err error) {
 	return
 }
 
-func (r *ConnectRequest) WriteTo(w io.Writer) (int64, error) {
+func (r *ConnectRequest) ResponseTo(w io.Writer) (int64, error) {
 	wBytes := int64(0)
 
 	body, err := r.Response()

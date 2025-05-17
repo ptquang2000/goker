@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"goker/internal/protocol"
 	"goker/internal/utils"
 	"net"
@@ -22,28 +23,32 @@ func ListenAndServe() {
 func clientHandle(c net.Conn) {
 	defer c.Close()
 
+	var b []byte
 	for {
-		var h protocol.MqttHeader
+		b = make([]byte, protocol.FixedHeaderLen)
+		if _, err := c.Read(b); err != nil {
+			utils.LogError("Failed to read header, err:", err)
+			return
+		}
 
-		p, err := protocol.ParseHeader()
+		h, err := protocol.ParseHeader(bytes.NewBuffer(b))
 		if err != nil {
 			utils.LogError(err != nil, "Failed to parse header, err:", err)
 			return
 		}
 
-		b := make([]byte, p.BodyLength())
-		n, err = c.Read(b)
-		if n != p.BodyLength() || err != nil {
-			utils.LogError("Failed to read body, read: ", n, ", err:", err)
+		b = make([]byte, h.BodyLength())
+		if _, err = c.Read(b); err != nil {
+			utils.LogError("Failed to read body, err:", err)
 			return
 		}
 
-		req, err := p.Parse(b)
+		req, err := h.ParseBody(bytes.NewBuffer(b))
 		if err != nil {
 			utils.LogError("Close connection with reason, err:", err)
 			return
 		}
 
-		req.WriteTo(c)
+		req.ResponseTo(c)
 	}
 }
