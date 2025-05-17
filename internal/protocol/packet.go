@@ -12,3 +12,6 @@ type RequestHeader interface {
 	ParseBody(*bytes.Buffer) (Request, error)
 	BodyLength() int
 }
+type PacketProperties struct {
+	fields map[MqttProperty]bool
+}

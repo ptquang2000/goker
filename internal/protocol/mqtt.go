@@ -41,20 +41,22 @@ func (t CType) encode() *bytes.Buffer {
 	return w
 }
 
-func (t *CType) decode(b []byte) (int, error) {
-	if len(b) < 1 {
-		return 0, errors.New("Missing packet type in header.")
+func (t *CType) decode(r *bytes.Buffer) error {
+	b, err := r.ReadByte()
+	if err != nil {
+		return errors.New("Missing packet type in header.")
 	}
-	*t = CType(b[0]>>4) & 0b0001111
+	*t = CType(b>>4) & 0b0001111
 	if *t <= RESERVED || *t >= COUNT {
-		return 0, errors.New("Unknowned MQTT Control Packet type!")
+		return errors.New("Unknowned MQTT Control Packet type!")
 	}
-	return 1, nil
+	r.UnreadByte()
+	return nil
 }
 
 type Flag struct {
 	dup    bool
-	qos    bool
+	qos    QoS
 	retain bool
 }
 
@@ -62,11 +64,9 @@ func (f Flag) encode() *bytes.Buffer {
 	w := bytes.NewBuffer(make([]byte, 0))
 	var b byte
 	if f.dup {
-		b |= 0b0100
+		b |= 0b1000
 	}
-	if f.qos {
-		b |= 0b0010
-	}
+	b |= byte(f.qos) << 1 & 0b0110
 	if f.dup {
 		b |= 0b0001
 	}
@@ -74,12 +74,14 @@ func (f Flag) encode() *bytes.Buffer {
 	return w
 }
 
-func (f *Flag) decode(b []byte) (int, error) {
-	if len(b) < 1 {
-		return 0, errors.New("Missing flag in header.")
+func (f *Flag) decode(r *bytes.Buffer) error {
+	b, err := r.ReadByte()
+	if err != nil {
+		return errors.New("Missing flag in header.")
 	}
-	*f = Flag{dup: bool(b[0]&0b0100 != 0), qos: bool(b[0]&0b0010 != 0), retain: bool(b[0]&0b0001 != 0)}
-	return 1, nil
+	*f = Flag{dup: bool(b&0b1000 != 0), qos: QoS(b & 0b0110 >> 1), retain: bool(b&0b0001 != 0)}
+	r.UnreadByte()
+	return nil
 }
 
 type MqttHeader struct {
@@ -100,17 +102,15 @@ func (h MqttHeader) encode() *bytes.Buffer {
 func ParseHeader(r *bytes.Buffer) (RequestHeader, error) {
 	h := &MqttHeader{}
 
-	b, err := r.ReadByte()
+	err := h.ctl.decode(r)
 	if err != nil {
-		return nil, errors.New("Malformed Fixed Header")
+		return nil, errors.New("Malformed Fixed Header, err:" + err.Error())
 	}
-
-	h.ctl = CType(b>>4) & 0b0001111
-	if h.ctl <= RESERVED || h.ctl >= COUNT {
-		return nil, errors.New("Unknowned MQTT Control Packet type!")
+	err = h.flag.decode(r)
+	if err != nil {
+		return nil, errors.New("Malformed Fixed Header, err:" + err.Error())
 	}
-
-	h.flag = Flag{dup: bool(b&0b0100 != 0), qos: bool(b&0b0010 != 0), retain: bool(b&0b0001 != 0)}
+	r.Next(1)
 
 	if h.len.decode(r) != nil {
 		return nil, err
@@ -127,6 +127,8 @@ func (p *MqttHeader) ParseBody(r *bytes.Buffer) (Request, error) {
 	switch p.ctl {
 	case CONNECT:
 		return ParseConnect(p, r)
+	case PUBLISH:
+		return ParsePublish(p, r)
 	default:
 		return nil, errors.New("Unsupported MQTT packet control")
 	}
@@ -213,6 +215,8 @@ const (
 	ServerKeepAlive                               = 0x13
 	ResponseInformation                           = 0x1A
 	ServerReference                               = 0x1C
+	TopicAlias                                    = 0x23
+	SubscriptionIdentifier                        = 0x0B
 )
 
 func (p MqttProperty) encode() *bytes.Buffer {
@@ -222,6 +226,7 @@ func (p MqttProperty) encode() *bytes.Buffer {
 }
 
 type ConnectProperties struct {
+	PacketProperties
 	sessionExpiryInterval time.Duration
 	receiveMaximum        TwoByteInteger
 	maximumPacketSize     FourByteInteger
@@ -231,8 +236,6 @@ type ConnectProperties struct {
 	userProperty          UTF8StringPair
 	authenticationMethod  UTF8String
 	authenticationData    BinaryData
-
-	fields map[MqttProperty]bool
 }
 
 func (p *ConnectProperties) decode(r *bytes.Buffer) error {
@@ -644,4 +647,122 @@ func (r *ConnectRequest) ResponseTo(w io.Writer) (int64, error) {
 	wBytes += n
 
 	return int64(wBytes), nil
+}
+
+type PublishRequest struct {
+	topic    UTF8String
+	packetId TwoByteInteger
+	prop     PublishProperties
+	pl       []byte
+}
+
+type PublishProperties struct {
+	PacketProperties
+	payloadFormatIndicator ByteInteger
+	messageExpiryInterval  time.Duration
+	topicAlias             TwoByteInteger
+	responseTopic          UTF8String
+	correlationData        BinaryData
+	userProperty           UTF8StringPair
+	subscriptionIdentifier VarByteInt
+	contentType            UTF8String
+}
+
+func (p *PublishProperties) decode(r *bytes.Buffer) error {
+	p.fields = make(map[MqttProperty]bool)
+	p.payloadFormatIndicator = false
+
+	var propLen VarByteInt
+	err := propLen.decode(r)
+	if err != nil {
+		return errors.New("Unable to decode publish property length.")
+	} else if r.Len() < int(propLen) {
+		return errors.New("Publish property must match set length.")
+	} else if propLen == 0 {
+		return nil
+	}
+
+	remain := r.Len()
+	for remain-r.Len() < int(propLen) {
+		b, err := r.ReadByte()
+		if err != nil {
+			return err
+		}
+		mProp := MqttProperty(b)
+		if p.fields[mProp] {
+			return errors.New("Duplicate connect property")
+		}
+		p.fields[mProp] = true
+
+		switch mProp {
+		case PayloadFormatIndicator:
+			if err = p.payloadFormatIndicator.decode(r); err != nil {
+				return errors.New("Invalid Payload Format Indicator, err:" + err.Error())
+			}
+		case MessageExpiryInterval:
+			var d FourByteInteger
+			if err = d.decode(r); err != nil {
+				return errors.New("Invalid Will Message Expiration Interval, err:" + err.Error())
+			}
+			p.messageExpiryInterval = time.Duration(d) * time.Second
+		case TopicAlias:
+			if err = p.topicAlias.decode(r); err != nil {
+				return errors.New("Invalid Topic Alias, err:" + err.Error())
+			}
+		case ResponseTopic:
+			if err = p.responseTopic.decode(r); err != nil {
+				return errors.New("Invalid Response Topic, err:" + err.Error())
+			}
+		case CorrelationData:
+			if err = p.correlationData.decode(r); err != nil {
+				return errors.New("Invalid Correlation Data, err:" + err.Error())
+			}
+		case UserProperty:
+			if err = p.userProperty.decode(r); err != nil {
+				return errors.New("Invalid User Property, err:" + err.Error())
+			}
+		case SubscriptionIdentifier:
+			if err = p.subscriptionIdentifier.decode(r); err != nil || p.subscriptionIdentifier == 0 {
+				return errors.New("Invalid Subscription Identifier, err:" + err.Error())
+			}
+		case ContentType:
+			if err = p.contentType.decode(r); err != nil {
+				return errors.New("Invalid Will Content Type, err:" + err.Error())
+			}
+		default:
+			return errors.New("Unknown publish property")
+		}
+	}
+	return nil
+}
+
+func ParsePublish(h *MqttHeader, r *bytes.Buffer) (Request, error) {
+	req := &PublishRequest{}
+
+	if err := req.topic.decode(r); err != nil {
+		return nil, errors.New("Unable to parse public topic name, err:" + err.Error())
+	}
+
+	// TODO: Wildcard and Subscription's Topic Filter checking
+
+	if h.flag.qos > QoS0 {
+		if err := req.packetId.decode(r); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := req.prop.decode(r); err != nil {
+		return nil, err
+	}
+
+	req.pl = make([]byte, r.Len())
+	if _, err := r.Read(req.pl); err != nil {
+		return nil, errors.New("Error reading publish payload")
+	}
+
+	return req, nil
+}
+
+func (req *PublishRequest) ResponseTo(w io.Writer) (int64, error) {
+	return 0, nil
 }

@@ -100,3 +100,25 @@ func testConnackProp(pkt *packets.Connack, t *testing.T) {
 		t.Error("Expected shared subscriptions should be unvailable")
 	}
 }
+
+func TestPublishPacket(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+
+	buf.Reset()
+	pp := &paho.Publish{
+		PacketID: 1,
+		QoS:      0,
+		Topic:    "Test",
+		Payload:  []byte("Test"),
+	}
+	ppp := pp.Packet()
+	ppp.WriteTo(buf)
+	req, err := parsePacket(buf)
+	if err != nil {
+		t.Error(err)
+		t.FailNow()
+	}
+
+	buf.Reset()
+	req.ResponseTo(buf)
+}
