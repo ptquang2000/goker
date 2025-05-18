@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"goker/internal/protocol"
+	"goker/internal/utils"
 	"testing"
 
 	"github.com/eclipse/paho.golang/packets"
@@ -121,4 +122,5 @@ func TestPublishPacket(t *testing.T) {
 
 	buf.Reset()
 	req.ResponseTo(buf)
+	utils.LogDebug(req.ToString())
 }

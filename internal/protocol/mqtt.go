@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"time"
@@ -625,6 +626,16 @@ func (r *ConnectRequest) Response() (w *bytes.Buffer, err error) {
 	return
 }
 
+func (req *ConnectRequest) ToString() string {
+	buf := bytes.NewBuffer(make([]byte, 0))
+
+	buf.WriteString(fmt.Sprintf("keepAlive: %s", req.keepAlive.String()))
+	buf.WriteString(fmt.Sprintf("clientId: %s", req.payload.clientIdentifier))
+	buf.WriteString(fmt.Sprintf("username: %s", req.payload.username))
+
+	return buf.String()
+}
+
 func (r *ConnectRequest) ResponseTo(w io.Writer) (int64, error) {
 	wBytes := int64(0)
 
@@ -761,6 +772,17 @@ func ParsePublish(h *MqttHeader, r *bytes.Buffer) (Request, error) {
 	}
 
 	return req, nil
+}
+
+func (req *PublishRequest) ToString() string {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.WriteString(fmt.Sprintf("packet: PUBLISH, "))
+	buf.WriteString(fmt.Sprintf("topic: %s, ", req.topic))
+	buf.WriteString(fmt.Sprintf("packId: %d, ", req.packetId))
+	buf.WriteString(fmt.Sprintf("payload: "))
+	buf.Write(req.pl)
+
+	return buf.String()
 }
 
 func (req *PublishRequest) ResponseTo(w io.Writer) (int64, error) {

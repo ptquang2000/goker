@@ -7,6 +7,7 @@ import (
 
 type Request interface {
 	ResponseTo(io.Writer) (int64, error)
+	ToString() string
 }
 type RequestHeader interface {
 	ParseBody(*bytes.Buffer) (Request, error)
